@@ -2,10 +2,10 @@
 
 ## [1.38.1.0] - 2026-05-14
 
-## **Page captures stop crashing on broken emoji bytes, every review skill ends with a build-actionable task checklist, federation sync no longer drops office-hours design docs.**
-## **Three community-filed issues landed as one bug-fix wave: surrogate-safe browse responses (including `/batch`), per-skill Implementation Tasks with JSONL handoff to `/autoplan`, and root-level artifact patterns in `.brain-allowlist`.**
+## **Every review skill ends with a build-actionable task checklist. Federation sync stops dropping office-hours design docs. Surrogate sanitization gets a defense-in-depth second layer on top of v1.38.0.0's choke point.**
+## **Two community-filed issues land as one wave: per-skill Implementation Tasks with JSONL handoff to `/autoplan`, and root-level artifact patterns in `.brain-allowlist`. Plus a testable `buildCommandResponse` extraction and JSON-escape sanitizer on top of v1.38.0.0's `handleCommandInternal` choke-point fix for #1440.**
 
-Page captures from real-world HTML hit `API Error 400: no low surrogate in string` when a page contains unpaired Unicode surrogate bytes (broken emoji, mid-character splits). Browse now sanitizes at the response chokepoint (`buildCommandResponse` in `server.ts`) AND at the `/batch` envelope, with separate utilities for raw UTF-16 surrogates and `\uXXXX` JSON escape sequences. Defense in depth wraps the highest-volume DOM-text emitters (`text`, `html`, `accessibility`, `snapshot`) at extraction time too. Every command response is now safe to JSON.stringify for the Claude API; the bug surfaces from `$B html`, `$B accessibility`, and `$B batch` are all closed, not just `$B text`. The chokepoint refactor extracts `buildCommandResponse` from `handleCommand` so the boundary is unit-testable without spinning up the server.
+v1.38.0.0 (just shipped) put surrogate sanitization at the architectural choke point inside `handleCommandInternal` — every command result is now sanitized once before any caller (HTTP, `/batch`, scoped-token dispatch) sees it. This release adds a defense-in-depth second layer: `buildCommandResponse` is extracted from `handleCommand` as an exported pure function, so the HTTP-response boundary is independently unit-testable, and a `stripLoneSurrogateEscapes` pass handles `\uXXXX` JSON escape sequences in case any payload was already JSON-stringified before reaching the choke point. The two layers compose: choke point catches raw surrogates at result-build time, boundary catches anything that slipped through as escape text.
 
 All four review skills (CEO / design / eng / DX) now end with an `## Implementation Tasks` markdown checklist and write a `jq`-built JSONL artifact to `~/.gstack/projects/$SLUG/tasks-{phase}-{datetime}.jsonl`. `/autoplan`'s Phase 4 reads all four files, scopes by current branch + 5-commit window, dedupes on exact `(component, sorted(files), title)` matches, and renders one aggregated list inside the final approval gate. Tasks that derive from the same finding now collapse; tasks that just happen to touch the same file with different titles surface separately so the human can decide whether they're the same work. Standalone review runs (`/plan-eng-review` alone, etc.) produce their own task list and JSONL file even outside autoplan — the JSONL is the handoff contract.
 
@@ -34,7 +34,7 @@ Page captures with mixed-script Unicode round-trip cleanly to the Claude API now
 
 #### Fixed
 
-- **Page-capture API 400 from lone Unicode surrogates (#1440)** — `browse/src/sanitize.ts` (new) exports `stripLoneSurrogates`, `stripLoneSurrogateEscapes`, and `sanitizeBody`. `buildCommandResponse` (extracted from `handleCommand`, now exported for testability) sanitizes every text/plain and application/json response body. `/batch` was bypassing this chokepoint (`server.ts:1841,1869`); each per-result string is now sanitized AND the final envelope gets a second pass on the JSON-escape form. Defense in depth wraps at `getCleanText`, `getCleanTextWithStripping`, `html`, `accessibility`, and `snapshot` extraction sites.
+- **Defense in depth on top of v1.38.0.0's surrogate sanitization (#1440)** — v1.38.0.0 sanitizes at `handleCommandInternal` (the choke point all callers go through). This release adds a second layer at the HTTP-response boundary: `browse/src/sanitize.ts` (new) exports `stripLoneSurrogates`, `stripLoneSurrogateEscapes` (handles `\uXXXX` JSON-escape variants the raw-codepoint regex misses), and `sanitizeBody` (picks the right pass for text/plain vs application/json). `buildCommandResponse` is extracted from `handleCommand` and exported so the response boundary is unit-testable without spinning up the server. `/batch` also gets a per-result + envelope sanitize as belt-and-suspenders. Defense-in-depth wraps at `getCleanText`, `getCleanTextWithStripping`, `html`, `accessibility`, and `snapshot` extraction sites so downstream consumers (datamarking, envelope wrapping) see clean text before any further processing.
 - **Federation sync drops `/office-hours` and `/plan-eng-review` artifacts (#1452)** — `bin/gstack-artifacts-init` adds `projects/*/*-design-*.md` and `projects/*/*-test-plan-*.md` to all three managed blocks: `.brain-allowlist`, `.brain-privacy-map.json` (class `artifact`), and `.gitattributes` (`merge=union`).
 - **`/setup-gbrain` wrong config key (#1441)** — verified already-fixed in v1.27.0.0; closed the issue with a comment citing the migration script that aligns legacy `gbrain_sync_mode` installs to the current `artifacts_sync_mode` key.
 
@@ -55,6 +55,66 @@ Page captures with mixed-script Unicode round-trip cleanly to the Claude API now
 - `/codex review` on Codex CLI ≥0.130.0 was handled separately by v1.34.2.0 (the dual-path bare/exec approach). Our planning surfaced an adjacent concern: the bare path no longer carries the filesystem boundary, so codex may waste tokens reading skill files when the diff happens to touch `.claude/skills/`. Filed as a follow-up issue; not blocking this release.
 - The implementation-tasks aggregation in `/autoplan` uses a structured JSONL handoff between phases rather than re-parsing markdown. Schema lives in `scripts/task-emission-schema.ts`. Adding a fifth review phase means adding the phase name to `VALID_PHASES` in `scripts/resolvers/tasks-section.ts` and including `{{TASKS_SECTION_EMIT:<phase-name>}}` in the new review template.
 - Touchfiles entries are unchanged — the new tests are all gate-tier unit tests that run on `bun test`. Touchfiles is only for E2E + LLM evals.
+
+## [1.38.0.0] - 2026-05-14
+
+## **Windows install actually works across every host adapter. Page scrapes survive lone Unicode surrogates on every egress path.**
+## **Forty-two `ln -snf` call sites in `setup` now route through one helper that picks `cp -R` / `cp -f` on MSYS2/Git Bash. The browse server sanitizes lone surrogates at the architectural choke point so HTTP, batch, and both SSE streams inherit it. The Windows free-test CI lane moves to a paid faster runner.**
+
+Windows users who pull `git pull && ./setup` now get fresh skill files for every host adapter (Claude, Codex, Factory, OpenCode, Kiro) — not just the top-level Claude SKILL.md. The previous behavior was silent staleness: `ln -snf` on Windows-without-Developer-Mode produces a frozen file copy that doesn't refresh on subsequent runs. A new `_link_or_copy` helper in `setup` dispatches on `IS_WINDOWS` and picks the right primitive (`cp -R` for directories, `cp -f` for files, `ln -snf` otherwise). All 42 symlink sites route through it. A static-invariant test asserts zero raw `ln` calls outside the helper body so the bug can't return through future contributions.
+
+The browse server's Unicode sanitization lifts from `handleCommand` (PR #1463's original target) to `handleCommandInternal` so the batch command path (`/command/batch`) inherits it too. Both SSE producers (activity feed at `/activity/stream` and inspector stream) now stringify with a `sanitizeReplacer` function that cleans every string value during JSON.stringify — post-stringify regex is ineffective there because `JSON.stringify` has already converted `\uD800` into the escape sequence `"\\ud800"` before the regex would run. Result: every page-content payload that ships from the server has lone UTF-16 surrogate halves replaced with U+FFFD before any downstream consumer (Anthropic API, sidebar JSON.parse) sees them.
+
+All Linux CI jobs migrate to `ubicloud-standard-8` for consolidated billing and 4x more cores than free `ubuntu-latest`. Eight workflows touch the Linux pool: `evals.yml`, `evals-periodic.yml`, `ci-image.yml`, `make-pdf-gate.yml`, `actionlint.yml`, `pr-title-sync.yml`, `skill-docs.yml`, `version-gate.yml`. The Windows-only job (`windows-free-tests.yml`) stays on GitHub's free `windows-latest` — Ubicloud doesn't ship a Windows pool, GitHub's paid `windows-latest-8-cores` requires org-level larger-runner billing enablement, and the wave-coverage tests this job runs are small enough that the slower 4-core free runner keeps total job time under 2 minutes. Four new wave tests get registered: sanitizer unit + bug-repro + wiring invariants, setup helper static-invariant + behavior matrix, build-script POSIX-shell sanity, and a doc-vs-config deprecated-key drift guard. Docs that still referenced the renamed `gbrain_sync_mode` config key now say `artifacts_sync_mode` consistently, and the drift guard prevents reintroduction.
+
+Contributed by @realcarsonterry: PRs #1460, #1461, #1462, and #1463 are the seed of this wave. The scope expansion to all 42 setup sites + every server egress path + Windows CI migration is the gstack maintainer's follow-through.
+
+### The numbers that matter
+
+Source: this branch's diff against `origin/main` and the wave plan at `~/.claude/plans/system-instruction-you-are-working-peppy-volcano.md` (target ship slot v1.38.0.0 after queue advance past in-flight PR #1500).
+
+| Surface | Before | After | Δ |
+|---------|--------|-------|---|
+| `setup` symlink sites guarded for Windows | 0 of 42 | 42 of 42 | +42 |
+| Server Unicode-sanitization egress points | 0 | 4 (HTTP, batch, activity SSE, inspector SSE) | +4 |
+| Bash brace groups in `package.json` build script (Bun-Windows-hostile) | 3 | 0 | -3 |
+| Stale `gbrain_sync_mode` references in docs | 5 | 0 | -5 |
+| New regression tests | 0 | 29 (4 files) | +29 |
+| Linux CI runner pool | mix of `ubuntu-latest` (4 core, free) + `ubicloud-standard-2` | `ubicloud-standard-8` everywhere | single billing surface for Linux, 4x more cores on previously-free jobs |
+| Windows CI runner | `windows-latest` (free) | `windows-latest` (free, unchanged) | Ubicloud doesn't offer Windows; paid GitHub larger-runner option requires org-billing toggle not currently set |
+
+The static invariant test (D7) reads `setup` and asserts zero raw `ln` calls outside the `_link_or_copy` helper body — even a single one-line slip by a future contributor fails the build.
+
+### What this means for downstream gstack users
+
+If you run gstack on Windows: `./setup` now produces a working install across every host adapter, and the user-visible note tells you to re-run after `git pull`. If you scrape pages with non-Latin text or emoji: Bun's CDP responses can no longer break the Anthropic API with lone-surrogate JSON bodies — sanitization is single-point and inherited by every server egress path. If you contribute to gstack: a future `ln -snf` slip in `setup` will fail CI, and a future SSE endpoint that bypasses sanitization is flagged by an inline invariant comment plus this CHANGELOG entry.
+
+### Itemized changes
+
+#### Added
+
+- **`browse/test/server-sanitize-surrogates.test.ts`** — 11 unit cases (passthrough, valid pair, lone high/low mid-string, trailing/leading lone, adjacent doubles, pair-then-lone, lone-then-pair), 2 bug-repro tests (UTF-8 round-trip + JSON round-trip), 3 wiring-invariant tests (handleCommandInternalImpl rename, SSE activity, SSE inspector).
+- **`test/setup-windows-fallback.test.ts`** — static invariant (zero raw `ln` calls outside helper), helper-existence assertions, behavior matrix (4 cells: file/dir × Windows/Unix) via awk-style helper extraction + `bash -c` sourcing, Windows-note printer registration check.
+- **`test/build-script-shell-compat.test.ts`** — regex against `package.json scripts.*` rejecting bash brace groups (Bun-Windows-hostile); asserts `.version` redirects use subshells, not braces.
+- **`test/docs-config-keys.test.ts`** — deprecated-key denylist (`gbrain_sync_mode`, `gbrain_sync_mode_prompted`) scanned across `docs/**/*.md`; round-trip test for `gstack-config get artifacts_sync_mode`.
+
+#### Changed
+
+- **`browse/src/server.ts`** — `handleCommandInternal` split into `handleCommandInternalImpl` (raw) + thin sanitizing wrapper. Single egress point for both HTTP and batch consumers. Inline INVARIANT comment near the wrapper documents the architectural constraint.
+- **`browse/src/server.ts` SSE producers** — activity feed (`/activity/stream`) and inspector stream stringify with `sanitizeReplacer`, a `JSON.stringify` replacer function that cleans every string value during encoding. Post-stringify regex is a no-op because `JSON.stringify` has already converted `\uD800` to `"\\ud800"` before the regex could match. Inline INVARIANT comment in each.
+- **`setup`** — new `_link_or_copy SRC DST` helper near `IS_WINDOWS` detection (~line 33). Auto-dispatches on file-vs-directory + Windows-vs-Unix, and skips Unix-style name-only aliases (e.g. `gstack/open-gstack-browser` for the connect-chrome alias) when the source doesn't resolve on disk so Windows installs don't abort under `set -e`. All 42 prior `ln -snf` call sites converted to `_link_or_copy`. New `_print_windows_copy_note_once` helper called from `link_claude_skill_dirs` after any link work completes. `cleanup_old_claude_symlinks` and `cleanup_prefixed_claude_symlinks` extended with a Windows branch so `--prefix` / `--no-prefix` flips remove stale real-file SKILL.md copies instead of leaving them behind.
+- **`.github/workflows/*.yml` (8 Linux workflows)** — every Linux `runs-on` switched to `ubicloud-standard-8`: `evals.yml`, `evals-periodic.yml`, `ci-image.yml`, `actionlint.yml`, `pr-title-sync.yml`, `skill-docs.yml`, `version-gate.yml`, and `make-pdf-gate.yml`'s Linux matrix entry. The `evals.yml` matrix default and the prose footer both updated to reference `ubicloud-standard-8`.
+- **`.github/workflows/windows-free-tests.yml`** — stays on GitHub-hosted free `windows-latest`. Test-list expanded to include the 4 new wave tests. Earlier attempts on Blacksmith/GitHub-larger/Ubicloud-Windows all failed (label not registered, org-billing off, vendor doesn't offer Windows respectively); free `windows-latest` is the working path.
+- **`.github/actionlint.yaml`** — registers the two Ubicloud Linux labels (`ubicloud-standard-2`, `ubicloud-standard-8`) so workflow lint accepts them. The duplicate dead-weight `actionlint.yaml` at the repo root is removed (actionlint only reads `.github/actionlint.yaml`).
+- **`package.json`** — build script's three `{ git rev-parse HEAD 2>/dev/null || true; } > path/.version` brace groups replaced with `( ... )` subshells. POSIX-universal, Bun-Windows-compatible.
+- **`docs/gbrain-sync.md`, `docs/gbrain-sync-errors.md`** — 5 stale `gbrain_sync_mode` config-key references → `artifacts_sync_mode` (the rename landed in v1.27.0.0 but two docs still pointed at the old key).
+
+#### For contributors
+
+- **Architectural invariant (Unicode):** every JSON.stringify call that serializes page-content-derived strings MUST be passed `sanitizeReplacer` (for object payloads where consumers will JSON.parse) OR the resulting body MUST be wrapped in `sanitizeLoneSurrogates` (for text/plain responses). Today this is enforced by `handleCommandInternal`'s sanitizing wrapper for command results and explicit `sanitizeReplacer` arguments at the two SSE producers. New SSE/WebSocket writers must follow the same pattern; inline comments near both producers say so.
+- **Architectural invariant (setup):** every symlink in `setup` MUST go through `_link_or_copy`. Enforced by `test/setup-windows-fallback.test.ts`'s static invariant — a single raw `ln` call outside the helper body fails CI.
+- **Test coverage gap closed:** prior to this wave, the curated Windows CI lane (`windows-free-tests.yml`) didn't exercise the install-symlink path, the Unicode sanitization, the build-script shell compat, or doc-config drift. All four now run on every PR.
+- **Out of scope (P2 follow-ups):** pushing sanitization deeper to `browse/src/snapshot.ts` (covers WebSocket frames that don't transit `cr.result`); porting the 24 POSIX-bound free tests to run on Windows (tracked in `windows-free-tests.yml`'s own comments).
 
 ## [1.37.0.0] - 2026-05-14
 
@@ -80,7 +140,6 @@ Source: `bun test test/gbrain-local-status.test.ts test/gbrain-detect-shape.test
 ### Itemized changes
 
 #### Added
-
 
 - `lib/gbrain-local-status.ts` — shared 5-state engine status classifier (`ok` / `no-cli` / `missing-config` / `broken-config` / `broken-db`) with 60s TTL cache and `--no-cache` flag. Probes via `gbrain sources list --json` + stderr classification reusing the exact patterns from `lib/gbrain-sources.ts:66-67`.
 - `/setup-gbrain` Step 1.5 — broken-db remediation with 4 options (Retry / Switch to PGLite / Switch brain mode / Quit). PGLite switch is rollback-safe: `mv ~/.gbrain/config.json` to a timestamped `.bak`, `gbrain init --pglite`, on non-zero exit restore the .bak verbatim.
