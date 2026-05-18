@@ -360,6 +360,11 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
     'test/helpers/agent-sdk-runner.ts',
     'scripts/resolvers/model-overlay.ts',
   ],
+
+  // /ios-qa device-farm — agent flow E2E. Daemon + stub StateServer + codegen
+  // exercised end-to-end. The no-device path is gate-tier; the with-device
+  // path requires GSTACK_HAS_IOS_DEVICE=1 and is periodic-tier.
+  'ios-qa-e2e':       ['ios-qa/**', 'ios-fix/**', 'ios-design-review/**', 'ios-clean/**', 'ios-sync/**', 'test/skill-e2e-ios.test.ts'],
 };
 
 /**
@@ -626,6 +631,10 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   // Overlay efficacy harness (SDK, paid) — periodic only
   'overlay-harness-opus-4-7-fanout-toy': 'periodic',
   'overlay-harness-opus-4-7-fanout-realistic': 'periodic',
+
+  // /ios-qa daemon + codegen — no-device path runs every PR (no hardware
+  // dependency, deterministic). with-device path requires GSTACK_HAS_IOS_DEVICE.
+  'ios-qa-e2e': 'gate',
 };
 
 /**
