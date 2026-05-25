@@ -197,17 +197,23 @@ export async function serve(options: ServeOptions): Promise<void> {
       );
     }
 
-    // Security: resolve symlinks and validate the reload path is within the
-    // allowed directory (anchored to the initial HTML file's parent).
-    // Prevents path traversal via /api/reload reading arbitrary files.
+    // Security: resolve symlinks and validate the reload path is a FILE
+    // inside the allowed directory (anchored to the initial HTML file's
+    // parent). Prevents path traversal via /api/reload reading arbitrary
+    // files. A path resolving to the allowedDir itself (a directory) used
+    // to pass the guard and then crash readFileSync with EISDIR — reject
+    // it explicitly with a clear 400 instead.
     const resolvedReload = fs.realpathSync(path.resolve(newHtmlPath));
-    if (
-      !resolvedReload.startsWith(allowedDir + path.sep) &&
-      resolvedReload !== allowedDir
-    ) {
+    if (!resolvedReload.startsWith(allowedDir + path.sep)) {
       return Response.json(
         { error: `Path must be within: ${allowedDir}` },
         { status: 403 },
+      );
+    }
+    if (!fs.statSync(resolvedReload).isFile()) {
+      return Response.json(
+        { error: `Path must be a file, not a directory: ${newHtmlPath}` },
+        { status: 400 },
       );
     }
 
