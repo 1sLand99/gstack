@@ -245,29 +245,38 @@ export function splitCatalogDescription(description: string): CatalogParts {
   // First normalize to single-line for sentence detection, then back out.
   const collapsed = working.replace(/\s+/g, ' ').trim();
   const sentenceMatch = collapsed.match(/^([^.!?]*[.!?])(?:\s|$)/);
-  let lead = sentenceMatch ? sentenceMatch[1].trim() : collapsed.split(/\s/).slice(0, 20).join(' ');
+  // sentenceLead is the FULL first sentence (no truncation). We compute routing
+  // from this position, then optionally truncate the displayed lead afterwards.
+  // Truncating first then computing routing was the v1.45.0.0 bug — when the
+  // first sentence exceeded 200 chars, the routing extraction would lose the
+  // entire tail of the description (design-consultation's "Use when..."
+  // routing prose silently dropped).
+  const sentenceLead = sentenceMatch ? sentenceMatch[1].trim() : collapsed.split(/\s/).slice(0, 20).join(' ');
 
-  // If the lead would be too long, trim to the first 140 chars at a word boundary
+  // Routing prose: everything AFTER the first sentence boundary in the collapsed view.
+  const leadInCollapsed = collapsed.indexOf(sentenceLead);
+  const routingCollapsed = leadInCollapsed >= 0
+    ? collapsed.slice(leadInCollapsed + sentenceLead.length).trim()
+    : '';
+
+  // Now produce the displayed lead — truncated if too long. The original
+  // sentenceLead is preserved for routing extraction below.
+  let lead = sentenceLead;
   if (lead.length > 200) {
     const trunc = lead.slice(0, 197);
     const lastSpace = trunc.lastIndexOf(' ');
     lead = (lastSpace > 60 ? trunc.slice(0, lastSpace) : trunc) + '...';
   }
-
-  const leadInCollapsed = collapsed.indexOf(lead);
-  const routingCollapsed = leadInCollapsed >= 0
-    ? collapsed.slice(leadInCollapsed + lead.length).trim()
-    : '';
   // Restore line breaks for routing prose by mapping back to original layout.
   // Use original whitespace structure where possible; fall back to collapsed.
+  // Anchor recovery on sentenceLead (the untruncated first sentence) — not
+  // `lead` (which may have a "..." suffix and won't substring-match `working`).
   let routingProse = routingCollapsed;
-  // Try to recover the multi-line layout: split working at the lead boundary.
-  const collapsedLeadIdx = working.replace(/\s+/g, ' ').indexOf(lead);
+  const collapsedLeadIdx = working.replace(/\s+/g, ' ').indexOf(sentenceLead);
   if (collapsedLeadIdx >= 0) {
-    // Walk the original working string until we've consumed lead.length collapsed chars
     let consumed = 0;
     let cut = 0;
-    for (let i = 0; i < working.length && consumed < collapsedLeadIdx + lead.length; i++) {
+    for (let i = 0; i < working.length && consumed < collapsedLeadIdx + sentenceLead.length; i++) {
       if (/\s/.test(working[i])) {
         if (i === 0 || /\s/.test(working[i - 1])) continue;
         consumed += 1;

@@ -45,7 +45,7 @@
     },
     "design-consultation": {
       "lead": "Design consultation: understands your product, researches the landscape, proposes a complete design system (aesthetic, typography, color, layout, spacing, motion), and generates font+color preview...",
-      "routing": "",
+      "routing": "Creates DESIGN.md as your project's design source\nof truth. For existing sites, use /plan-design-review to infer the system instead.\nUse when asked to \"design system\", \"brand guidelines\", or \"create DESIGN.md\".\nProactively suggest when starting a new project's UI with no existing\ndesign system or DESIGN.md.",
       "voice_line": null
     },
     "learn": {
