@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.49.0.0] - 2026-05-26
+
+## **Contributor opt-in for /plan-tune behavioral logging, plus a first-run setup wizard that catches users who set `question_tuning: true` directly.**
+
+Running `/plan-tune` now does the right thing the first time, every time. New contributors see an explicit consent prompt with contributor-specific framing ("logging stays local, helps v2 calibration data accumulate") before any AskUserQuestion outcome gets logged. Anyone who set `question_tuning: true` via `gstack-config` without running the wizard hits the new setup gate on their next invocation — the 5-question declared-profile wizard runs once, then never again. Both flows use marker files (`~/.gstack/.question-tuning-prompted`, `~/.gstack/.declared-setup-prompted`) so the user is asked at most once.
+
+The branch took a hard turn during /plan-eng-review. The original Phase A approach auto-flipped the `question_tuning` default for contributors via `bin/gstack-config`. Codex's outside voice pushed back on two grounds: notice-after-enablement isn't consent, and reusing `gstack_contributor` (documented as "file field reports") for fine-grained behavioral logging is semantic drift. The auto-flip was reverted; the substance moved entirely into `plan-tune/SKILL.md.tmpl` as an explicit consent surface. Codex's outside voice also surfaced a calibration-gate inconsistency across three docs — `docs/designs/PLAN_TUNING_V0.md` said "90+ days stable" for E1 promotion, the TODOS.md E1 card said "2+ weeks", and the binary's display gate uses 7 days / 20 samples. The fix distinguishes the two: the 7-day gate is for "show me my inferred profile" (display affordance), the 90-day gate is for "ship behavior-adapting defaults" (E1 promotion). TODOS.md updated, both gates documented inline.
+
+### What changed
+
+| File | Why |
+|------|-----|
+| `plan-tune/SKILL.md.tmpl` | Step 0 grows two implicit gates that run before user-intent routing — consent gate (asks once per contributor) + setup gate (catches `question_tuning: true` with empty declared). Existing Enable+setup section split into "Consent + opt-in" (with contributor-specific copy) and standalone "5-Q setup" reachable from both paths. Display-vs-promotion gate distinction added inline so future readers don't confuse the 7-day diversity gate with the 90-day E1 acceptance gate. |
+| `plan-tune/SKILL.md` | Regenerated from the patched template. |
+| `TODOS.md` | E1 card's "Depends on" line corrected from "2+ weeks" to "90+ days stable across 3+ skills" (matches `PLAN_TUNING_V0.md`). Added Codex's E1 substrate risk note: generated skill prose is agent-compliance-based, so E1 adaptations ship as advisory annotations on AskUserQuestion recommendations until there's a hard runtime execution path. Do NOT gate AUTO_DECIDE on inferred profile alone. |
+
+### What did NOT ship (and why)
+
+- **Auto-flip of `question_tuning` for contributors.** Codex's outside voice argued the privacy posture should match the rest of the codebase (telemetry off-by-default with stop-gate, artifacts off-by-default with stop-gate). The consent surface in `/plan-tune` Step 0 is the right place to ask. Slower calibration data ramp, coherent posture.
+- **Broader-user calibration weighting.** Contributors are the cohort most willing to opt in but also the cohort least representative of broader gstack users. v2 E1 signal-map design will need to address bias — either by widening the cohort, weighting non-contributor explicit opt-ins more heavily, or shipping contributor-only "advisory mode" that doesn't change defaults for users who haven't opted in. Out of scope for this PR.
+- **Real YAML parser for `gstack-config`.** The codebase uses grep+awk YAML parsing throughout. Since this PR no longer reads YAML conditionally, the broader fragility (comments, quoted booleans, duplicate keys, CRLF) is back to pre-existing scope. Separate refactor PR if ever needed.
+
+### What this means for you
+
+If you're a gstack contributor and you set `gstack_contributor: true` previously: nothing changes by default. Your next `/plan-tune` invocation will offer the opt-in. Accept and you get the consent + 5-Q setup flow in ~2 minutes; decline and you're never asked again. If you've already opted in via `gstack-config set question_tuning true` but skipped the wizard (likely if you set it manually), your next `/plan-tune` will run just the 5-Q setup so your declared profile is populated.
+
+If you're a v2 work planner: E1's "skills consume profile and adapt defaults" promotion gate is now consistently 90+ days stable across 3+ skills. Don't start E1 work based on the lower 7-day display gate — that's just for showing the inferred column in `/plan-tune` output. Substrate risk note in TODOS.md spells out the agent-compliance constraint: E1 adaptations should ship as advisory annotations, not silent AUTO_DECIDE behavior.
+
+### Itemized changes
+
+**Added**
+- `plan-tune/SKILL.md.tmpl`: "Consent + opt-in" section with contributor-specific framing variant. Runs only if `question_tuning` is false AND `~/.gstack/.question-tuning-prompted` is missing. Marker write is unconditional after the prompt — never re-asks regardless of answer.
+- `plan-tune/SKILL.md.tmpl`: Step 0 implicit gates — "Consent gate" (offers opt-in) + "Setup gate" (runs 5-Q wizard when `question_tuning=true` AND declared is empty AND no `.declared-setup-prompted` marker). Gate phrasing uses Codex's cleaner formulation.
+- `plan-tune/SKILL.md.tmpl`: Inline distinction between the display gate (`sample_size >= 20 AND skills_covered >= 3 AND question_ids_covered >= 8 AND days_span >= 7`) and the E1 promotion gate (90+ days stable across 3+ skills). Display gate is for rendering inferred values; promotion gate is for shipping behavior adaptation.
+
+**Changed**
+- `TODOS.md` E1 card: "Depends on" line aligned with `docs/designs/PLAN_TUNING_V0.md` §"Deferred to v2" — "90+ days of v1 dogfood stable across 3+ skills" (was "2+ weeks").
+- `TODOS.md` E1 card: Added substrate risk note from Codex outside-voice. E1 adaptations ship as advisory annotations on AskUserQuestion recommendations, not as runtime-enforced AUTO_DECIDE behavior. Tests can verify generated templates contain the right reads of `~/.gstack/developer-profile.json` but cannot prove agents obey them at runtime.
+
+**For contributors**
+- Plan file: `/Users/garrytan/.claude/plans/hm-ok-well-can-imperative-unicorn.md` captures the full /plan-eng-review + Codex outside-voice exchange and decision rationale.
+- Size-budget override: `plan-tune/SKILL.md` grew from 50,123 to 52,963 bytes (×1.06), crossing the v1.44.1 baseline ratio of 1.05. Documented override reason logged to audit trail.
+
 ## [1.46.0.0] - 2026-05-26
 
 ## **gstack v2 foundation lands. Catalog tokens drop 56%, eval-first floor covers all 51 skills, hard token + dollar caps gate every PR.**
