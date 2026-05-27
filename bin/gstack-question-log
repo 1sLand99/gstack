@@ -28,7 +28,8 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 eval "$("$SCRIPT_DIR/gstack-slug" 2>/dev/null)"
-GSTACK_HOME="${GSTACK_HOME:-$HOME/.gstack}"
+# GSTACK_STATE_ROOT takes precedence over GSTACK_HOME (test isolation per D16).
+GSTACK_HOME="${GSTACK_STATE_ROOT:-${GSTACK_HOME:-$HOME/.gstack}}"
 mkdir -p "$GSTACK_HOME/projects/$SLUG"
 
 INPUT="$1"
