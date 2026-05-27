@@ -57,6 +57,27 @@ Phase 2 calibration write-back is gated behind the `BRAIN_CALIBRATION_WRITEBACK`
 - Upstream gbrain dependency for Phase 2: `takes_add` + `takes_resolve` MCP ops in `~/git/gbrain/` (filed as P2 in TODOS.md). Phase 2 wiring already exists behind `BRAIN_CALIBRATION_WRITEBACK` flag; flag flips when upstream lands.
 - Plan / CEO + eng review record: `~/.claude/plans/hm-interesting-well-why-dapper-eagle.md` (Approach B + 5 cherry-picks + 11 D-decisions from full eng review + codex outside-voice synthesis).
 
+### Save-results path: works under any CLI when gbrain is on PATH
+
+Brain-aware planning saves the actual review document to gbrain, not just preflight digests and calibration takes. Setup detects gbrain at install time and, if present, the planning skills emit compressed `gbrain put "<prefix>/<feature-slug>"` instructions for `office-hours/`, `ceo-plans/`, `eng-reviews/`, `design-reviews/`, and `devex-reviews/` slug spaces. If gbrain is not detected, the save-results block is suppressed entirely. Zero token overhead for users without gbrain. If you install gbrain after running `./setup`, run `gstack-config gbrain-refresh` to pick up the change.
+
+Token cost stays tight: the inline save-results block is ~150 tokens per planning skill (down from ~1000 a naive un-suppression would have added). The full save template (heredoc body, entity-stub instructions, throttle handling, backlinks) lives in `docs/gbrain-write-surfaces.md` §Save Template and the agent reads it on demand only when it actually saves. Same compression discipline for the brain-context-load block: ~115 tokens with skip-header pointing to §Context Load.
+
+| Detection state | Per-planning-skill token overhead | What the agent does on save |
+|---|---|---|
+| gbrain on PATH + `gstack-config gbrain-refresh` says `local_status: "ok"` | ~250 tokens (CONTEXT_LOAD + SAVE_RESULTS, compressed) | reads `docs/gbrain-write-surfaces.md` on demand, calls `gbrain put <prefix>/<slug>` |
+| gbrain not on PATH | 0 tokens | block suppressed at gen-time, nothing rendered |
+| GBrain or Hermes host adapter | full inline render (unchanged) | calls `gbrain put` always |
+
+Wired for all five planning skills uniformly: `office-hours`, `plan-ceo-review`, `plan-eng-review`, `plan-design-review`, `plan-devex-review`. The last two gained the `{{GBRAIN_SAVE_RESULTS}}` placeholder in their templates (previously only the first three had it, so design-review and devex-review produced no retrievable page even under GBrain CLI).
+
+Coverage: a free resolver-level unit test pins per-skill slug + tag metadata + the compressed token budget (`test/resolvers-gbrain-save-results.test.ts`, 10 tests / 53 assertions); a free override-mechanism test asserts the detection file gates resolver rendering correctly across `detected: true`, `detected: false`, and `no file` states (`test/gbrain-detection-override.test.ts`, 4 tests); a periodic-tier fake-CLI E2E drives `/office-hours` against a stub `gbrain` on PATH and asserts the agent actually calls `gbrain put office-hours/<slug>` with valid YAML frontmatter (`test/skill-e2e-office-hours-brain-writeback.test.ts`, ~$0.50-1/run); a periodic-tier real-CLI round-trip drives `gbrain init --pglite` + `gbrain put` + `gbrain get` against an isolated temp HOME and asserts the body survives (`test/skill-e2e-gbrain-roundtrip-local.test.ts`, ~$0.001/run, skips if `VOYAGE_API_KEY` is unset). Together: the agent obeys the resolver instruction, the resolver emits a valid CLI shape, and the CLI persists the page on the local engine. Remote/Supabase routing is gbrain's contract to honor — the same CLI shape covers all engines, so gstack stops at local round-trip coverage.
+
+**For contributors (save-results layer):**
+- `bin/gstack-config gbrain-refresh` re-runs `bin/gstack-gbrain-detect` and writes `~/.gstack/gbrain-detection.json`. `./setup` runs this at the end of install and conditionally regenerates Claude-host SKILL.md with `bun run gen:skill-docs:user` (added package.json script) so detected installs get the brain blocks immediately.
+- The default `bun run gen:skill-docs` (CI canonical) ignores the detection file. Committed SKILL.md stays reproducible regardless of any developer's local gbrain state. Use `bun run gen:skill-docs:user` for user-local installs.
+- Two follow-ups deferred to `TODOS.md` (P2): re-verify calibration takes when gbrain v0.42+ ships `takes_add` (the `BRAIN_CALIBRATION_WRITEBACK` flag flips); extend the brain-writeback E2E to the other 4 planning skills.
+
 ## [1.48.0.0] - 2026-05-26
 
 ## **Agents stop dropping AskUserQuestion options when there are 5+.** A new canonical preamble rule + runtime gate makes Conductor's 4-option cap a split-or-batch decision, not a silent trim.

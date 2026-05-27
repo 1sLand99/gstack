@@ -2033,3 +2033,50 @@ until users report stale digests where a background refresh silently
 failed.
 
 **Effort:** S (human ~2h, CC ~20min)
+
+### P2: Re-verify calibration takes when gbrain v0.42+ lands
+
+**What:** When upstream gbrain ships `takes_add` MCP op and we flip
+`BRAIN_CALIBRATION_WRITEBACK` from FALSE to TRUE, re-run the manual
+probe in `docs/gbrain-write-surfaces.md` against `/office-hours` and
+confirm `gbrain takes_list` surfaces a `kind=bet` entry with the
+expected weight (0.9 for office-hours, per
+`scripts/brain-cache-spec.ts:151-157`).
+
+**Why:** Today the calibration take path falls back to writing inside a
+`gbrain put` fence block because `takes_add` isn't available yet. Once
+v0.42+ ships, the agent will call `takes_add` directly — we should
+confirm the new path actually persists a queryable take.
+
+**Context:** v1.50.0.0 plan §"NOT in scope". The fence-block fallback
+test (`test/takes-fence-fallback.test.ts`) covers wiring for both paths;
+this TODO is about live verification of the preferred path when it
+becomes available.
+
+**Effort:** XS (human ~15min, CC ~5min)
+
+**Depends on:** Upstream gbrain v0.42+ release shipping `takes_add` MCP
+op (separate TODO above).
+
+### P2: Extend brain-writeback E2E to the other 4 planning skills
+
+**What:** `test/skill-e2e-office-hours-brain-writeback.test.ts` covers
+the brain-writeback path for `/office-hours` only. Adding parallel
+tests for `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`,
+and `/plan-devex-review` would bring per-skill agent-obedience coverage
+to parity with the resolver unit test
+(`test/resolvers-gbrain-save-results.test.ts`, which covers wiring for
+all 5).
+
+**Why:** The resolver test proves the right instructions get emitted;
+the E2E proves the agent actually obeys. Today we only have that
+end-to-end signal for one of five planning skills.
+
+**Context:** v1.50.0.0 plan §"NOT in scope". Extract `makeFakeGbrain`
+into `test/helpers/fake-gbrain.ts` when the second consumer arrives
+(YAGNI for one consumer today).
+
+**Effort:** S (human ~1d, CC ~1h). Periodic-tier (~$2-4 total for 4
+runs).
+
+**Depends on:** None.
