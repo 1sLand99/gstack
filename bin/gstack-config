@@ -108,6 +108,8 @@ lookup_default() {
     cross_project_learnings) echo "" ;; # intentionally empty → unset triggers first-time prompt
     artifacts_sync_mode) echo "off" ;;
     artifacts_sync_mode_prompted) echo "false" ;;
+    redact_repo_visibility) echo "" ;; # empty → fall through to gh/glab detection
+    redact_prepush_hook) echo "false" ;;
     *) echo "" ;;
   esac
 }
@@ -142,6 +144,17 @@ case "${1:-}" in
     if [ "$KEY" = "artifacts_sync_mode" ] && [ "$VALUE" != "off" ] && [ "$VALUE" != "artifacts-only" ] && [ "$VALUE" != "full" ]; then
       echo "Warning: artifacts_sync_mode '$VALUE' not recognized. Valid values: off, artifacts-only, full. Using off." >&2
       VALUE="off"
+    fi
+    # redact_repo_visibility: a LOCAL override for repos gh/glab can't read (e.g.
+    # self-hosted GitLab). It lives in ~/.gstack/config.yaml (never committed), so
+    # it can't be used to weaken the gate repo-wide for other contributors.
+    if [ "$KEY" = "redact_repo_visibility" ] && [ "$VALUE" != "public" ] && [ "$VALUE" != "private" ] && [ "$VALUE" != "unknown" ]; then
+      echo "Warning: redact_repo_visibility '$VALUE' not recognized. Valid values: public, private, unknown. Using unknown." >&2
+      VALUE="unknown"
+    fi
+    if [ "$KEY" = "redact_prepush_hook" ] && [ "$VALUE" != "true" ] && [ "$VALUE" != "false" ]; then
+      echo "Warning: redact_prepush_hook '$VALUE' not recognized. Valid values: true, false. Using false." >&2
+      VALUE="false"
     fi
     mkdir -p "$STATE_DIR"
     # Write annotated header on first creation
