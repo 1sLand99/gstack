@@ -6,15 +6,24 @@
 // native merge queue, and trunk.io merge queue.
 //
 // Subcommands:
-//   detect      [--base B] [--pr N] [--json]
-//   submit      --regime R --pr N [--base B] [--priority P]
-//   wait        --pr N --base B [--regime R] [--timeout S] [--interval S]
-//               [--enqueue-timeout S] [--once]
-//   write-state --pr N --base B --slug SLUG [--regime R] [--sha-timeout S]
-//   read-state  --slug SLUG --pr N --repo OWNER/NAME [--max-age-ms N] [--json]
+//   detect          [--base B] [--pr N] [--json]
+//   submit          --regime R --pr N [--base B] [--priority P]
+//   confirm-enqueue --regime R --pr N --base B [--slug S] [--enqueue-timeout S]
+//   wait            --pr N --base B [--regime R] [--timeout S] [--interval S]
+//                   [--enqueue-timeout S] [--once]
+//   write-state     --pr N --base B --slug SLUG [--regime R] [--sha-timeout S]
+//   read-state      --slug SLUG --pr N --repo OWNER/NAME [--max-age-ms N] [--json]
 //
-// Contract: detect/wait/read-state never mutate git/PR state. submit and
-// write-state are the only state-touching subcommands.
+// `submit` enqueues. For a queue regime the merge then happens asynchronously
+// (trunk/GitHub land it), so /land's DEFAULT is submit + confirm-enqueue +
+// return — the user can queue many PRs and walk away. `--watch` swaps
+// confirm-enqueue for the blocking `wait` (poll until landed), which is also
+// what /land-and-deploy uses (it needs the completed merge to deploy).
+//
+// Contract: detect/confirm-enqueue/wait/read-state never mutate git/PR state.
+// submit and write-state are the only state-touching subcommands.
+// confirm-enqueue writes last-enqueue.json (a queued marker, no merge SHA);
+// write-state writes last-land.json (a confirmed merge with a SHA).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
@@ -238,6 +247,87 @@ function submitViaRest(pr: number, base: string, priority?: string): { code: num
   ]);
 }
 
+/** Write last-enqueue.json — a queued marker (no merge SHA yet). */
+function writeEnqueueState(slug: string, pr: number, repo: string, regime: Regime, base: string): string {
+  const dir = join(homedir(), '.gstack', 'projects', slug);
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, 'last-enqueue.json');
+  const tmp = `${dest}.${process.pid}.tmp`;
+  const body = { schema_version: 1, pr, repo, regime, base, queued: true, ts: new Date().toISOString() };
+  writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 });
+  renameSync(tmp, dest);
+  return dest;
+}
+
+/**
+ * Confirm a queue regime actually picked the PR up, then RETURN (don't wait for
+ * it to land). This is the default for /land on a queue regime — the whole
+ * point of a merge queue is that you don't babysit. Trunk lands it (optimistic
+ * merge / parallel / batching) on its own.
+ *
+ * Confirmed when: PR already MERGED (fast direct-merge-to-main), OR the
+ * "Trunk Merge Queue (<base>)" check appears (trunk), OR GitHub auto-merge is
+ * enabled (github). Times out for trunk if a posted "/trunk merge" was inert
+ * (App not installed / "GitHub commands" off).
+ */
+async function cmdConfirmEnqueue(flags: Record<string, string>): Promise<number> {
+  const pr = flags.pr;
+  const base = flags.base;
+  if (!pr || !base) { process.stderr.write('confirm-enqueue: --pr and --base are required\n'); return 2; }
+  const regime = (flags.regime || 'none') as Regime;
+  const enqueueMs = (Number(flags['enqueue-timeout']) || 120) * 1000;
+  const intervalMs = (Number(flags.interval) || 15) * 1000;
+
+  if (regime === 'none') {
+    // Direct merge is synchronous — there is nothing to enqueue.
+    const v = prView(pr) || {};
+    process.stdout.write(`ENQUEUE_NA=none\nPR_STATE=${(v.state || 'OPEN').toUpperCase()}\n`);
+    return 0;
+  }
+
+  const start = Date.now();
+  let confirmed = false;
+  let how = '';
+  while (Date.now() - start < enqueueMs) {
+    const v = prView(pr) || {};
+    if ((v.state || '').toUpperCase() === 'MERGED') { confirmed = true; how = 'already merged'; break; }
+    if (regime === 'trunk' && findQueueCheck(prChecks(pr), base)) {
+      confirmed = true; how = `${trunkQueueCheckName(base)} check present`; break;
+    }
+    if (regime === 'github' && v.autoMergeRequest != null) {
+      confirmed = true; how = 'GitHub auto-merge enabled'; break;
+    }
+    await sleep(Math.min(intervalMs, 15000));
+  }
+
+  if (!confirmed) {
+    if (regime === 'trunk') {
+      process.stderr.write(
+        'TRUNK_ENQUEUE_TIMEOUT — posted "/trunk merge" but no "' + trunkQueueCheckName(base) +
+        '" check appeared. Is the Trunk GitHub App installed and "GitHub commands" enabled?\n',
+      );
+    } else {
+      process.stderr.write(
+        'ENQUEUE_UNCONFIRMED — GitHub auto-merge is not enabled on the PR after submit. ' +
+        'Check the repo merge-queue / auto-merge settings.\n',
+      );
+    }
+    return 1;
+  }
+
+  let stateFile = '';
+  if (flags.slug) stateFile = writeEnqueueState(flags.slug, Number(pr), repoSlug(), regime, base);
+
+  process.stdout.write(`ENQUEUED=${regime}\nENQUEUE_HOW=${how}\n`);
+  if (regime === 'trunk') {
+    process.stdout.write(`WATCH_CHECK=${trunkQueueCheckName(base)}\nWATCH_DASHBOARD=https://app.trunk.io\n`);
+  } else {
+    process.stdout.write('WATCH_CHECK=GitHub merge queue (on the PR)\n');
+  }
+  if (stateFile) process.stdout.write(`ENQUEUE_FILE=${stateFile}\n`);
+  return 0;
+}
+
 async function cmdWait(flags: Record<string, string>): Promise<number> {
   const pr = flags.pr;
   const base = flags.base;
@@ -416,11 +506,12 @@ async function main(): Promise<number> {
   switch (cmd) {
     case 'detect': return cmdDetect(flags, bools);
     case 'submit': return cmdSubmit(flags);
+    case 'confirm-enqueue': return cmdConfirmEnqueue(flags);
     case 'wait': return cmdWait(flags);
     case 'write-state': return cmdWriteState(flags);
     case 'read-state': return cmdReadState(flags, bools);
     default:
-      process.stderr.write('usage: gstack-merge <detect|submit|wait|write-state|read-state> [flags]\n');
+      process.stderr.write('usage: gstack-merge <detect|submit|confirm-enqueue|wait|write-state|read-state> [flags]\n');
       return 2;
   }
 }
