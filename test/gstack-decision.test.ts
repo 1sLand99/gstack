@@ -3,14 +3,24 @@
  */
 
 import { describe, it, expect } from "bun:test";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   validateDecide,
   makeRefEvent,
   computeActive,
   filterByScope,
   decisionPaths,
+  appendEvent,
+  readEvents,
+  writeSnapshot,
+  readSnapshot,
+  rebuildSnapshot,
+  compact,
   type DecisionEvent,
   type ActiveDecision,
+  type DecisionPaths,
 } from "../lib/gstack-decision";
 
 const PEM_SECRET = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
@@ -104,5 +114,68 @@ describe("decisionPaths", () => {
     expect(p.log).toBe("/tmp/gs/projects/garrytan-gstack/decisions.jsonl");
     expect(p.snapshot).toBe("/tmp/gs/projects/garrytan-gstack/decisions.active.json");
     expect(p.archive).toBe("/tmp/gs/projects/garrytan-gstack/decisions.archive.jsonl");
+  });
+});
+
+describe("snapshot + compaction (real files)", () => {
+  function freshPaths(): { paths: DecisionPaths; cleanup: () => void } {
+    const dir = mkdtempSync(join(tmpdir(), "decision-store-"));
+    const paths: DecisionPaths = {
+      log: join(dir, "decisions.jsonl"),
+      snapshot: join(dir, "decisions.active.json"),
+      archive: join(dir, "decisions.archive.jsonl"),
+    };
+    return { paths, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  it("writeSnapshot/readSnapshot roundtrip; bounded read returns active", () => {
+    const { paths, cleanup } = freshPaths();
+    const a = decide("1") as ActiveDecision;
+    writeSnapshot(paths, [a]);
+    expect(readSnapshot(paths).map((d) => d.id)).toEqual(["1"]);
+    cleanup();
+  });
+
+  it("rebuildSnapshot computes active from the event log", () => {
+    const { paths, cleanup } = freshPaths();
+    appendEvent(paths, decide("1"));
+    appendEvent(paths, decide("2"));
+    appendEvent(paths, makeRefEvent("supersede", "1"));
+    expect(rebuildSnapshot(paths).map((d) => d.id)).toEqual(["2"]);
+    expect(readSnapshot(paths).map((d) => d.id)).toEqual(["2"]);
+    cleanup();
+  });
+
+  it("compact keeps active, archives superseded, EXPUNGES redacted (not archived)", () => {
+    const { paths, cleanup } = freshPaths();
+    appendEvent(paths, decide("active1"));
+    appendEvent(paths, decide("super1"));
+    appendEvent(paths, makeRefEvent("supersede", "super1"));
+    appendEvent(paths, decide("secret1", { decision: "had a secret", rationale: "redact me" }));
+    appendEvent(paths, makeRefEvent("redact", "secret1"));
+
+    const r = compact(paths);
+    expect(r.activeCount).toBe(1);
+    expect(r.archivedCount).toBe(1);   // super1
+    expect(r.expungedCount).toBe(1);   // secret1
+
+    // log = active only
+    expect(readEvents(paths).map((e) => e.id)).toEqual(["active1"]);
+    // archive has the superseded decision...
+    const archive = readFileSync(paths.archive, "utf-8");
+    expect(archive).toContain("super1");
+    // ...but NOT the redacted one (expunged everywhere)
+    expect(archive).not.toContain("secret1");
+    expect(readFileSync(paths.log, "utf-8")).not.toContain("secret1");
+    cleanup();
+  });
+
+  it("appendEvent + readEvents survive a concurrent-style double append", () => {
+    const { paths, cleanup } = freshPaths();
+    appendEvent(paths, decide("1"));
+    appendEvent(paths, decide("2"));
+    expect(readEvents(paths).length).toBe(2);
+    expect(existsSync(paths.log)).toBe(true);
+    cleanup();
   });
 });

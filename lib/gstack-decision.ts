@@ -16,6 +16,7 @@
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
+import { writeFileSync, renameSync, existsSync, readFileSync } from "fs";
 import { appendJsonl, readJsonl, hasInjection } from "./jsonl-store";
 import { scan } from "./redact-engine";
 
@@ -178,4 +179,70 @@ export function appendEvent(paths: DecisionPaths, event: DecisionEvent): void {
 /** Read all events tolerantly (skips malformed/partial-tail lines). */
 export function readEvents(paths: DecisionPaths): DecisionEvent[] {
   return readJsonl<DecisionEvent>(paths.log);
+}
+
+/**
+ * Write the bounded active snapshot (`decisions.active.json`) atomically. Context
+ * Recovery and search read THIS, not the full history — session start stays
+ * O(active), not O(history).
+ */
+export function writeSnapshot(paths: DecisionPaths, active: ActiveDecision[]): void {
+  const tmp = `${paths.snapshot}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(active), "utf-8");
+  renameSync(tmp, paths.snapshot);
+}
+
+/** Read the bounded active snapshot. Returns [] if missing/corrupt (caller may rebuild). */
+export function readSnapshot(paths: DecisionPaths): ActiveDecision[] {
+  if (!existsSync(paths.snapshot)) return [];
+  try {
+    const v = JSON.parse(readFileSync(paths.snapshot, "utf-8"));
+    return Array.isArray(v) ? (v as ActiveDecision[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Recompute active from the event log and refresh the snapshot. Returns active. */
+export function rebuildSnapshot(paths: DecisionPaths): ActiveDecision[] {
+  const active = computeActive(readEvents(paths));
+  writeSnapshot(paths, active);
+  return active;
+}
+
+export interface CompactResult {
+  activeCount: number;
+  /** superseded decisions moved to the archive (history kept). */
+  archivedCount: number;
+  /** redacted decisions DROPPED entirely (expunged, NOT archived). */
+  expungedCount: number;
+}
+
+/**
+ * Compact the event log to the active set.
+ *  - active decisions → kept in `decisions.jsonl`,
+ *  - superseded decisions → appended to `decisions.archive.jsonl` (history),
+ *  - REDACTED decisions → expunged (dropped, NOT archived) — that's redact's job:
+ *    a `redact` is how an accidentally-captured secret leaves the store for good.
+ * Atomic rewrite (tmp + rename). Refreshes the snapshot.
+ */
+export function compact(paths: DecisionPaths): CompactResult {
+  const events = readEvents(paths);
+  const active = computeActive(events);
+  const activeIds = new Set(active.map((d) => d.id));
+  const redactedIds = new Set(
+    events.filter((e) => e.kind === "redact" && e.supersedes).map((e) => e.supersedes as string),
+  );
+  // Superseded = a decide that's neither active nor redacted. Archive these for history.
+  const superseded = events.filter(
+    (e): e is DecisionEvent => e.kind === "decide" && !activeIds.has(e.id) && !redactedIds.has(e.id),
+  );
+  for (const e of superseded) appendJsonl(paths.archive, e);
+
+  const tmp = `${paths.log}.tmp.${process.pid}`;
+  writeFileSync(tmp, active.map((d) => JSON.stringify(d)).join("\n") + (active.length ? "\n" : ""), "utf-8");
+  renameSync(tmp, paths.log);
+  writeSnapshot(paths, active);
+
+  return { activeCount: active.length, archivedCount: superseded.length, expungedCount: redactedIds.size };
 }
