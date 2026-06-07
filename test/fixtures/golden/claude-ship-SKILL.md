@@ -22,6 +22,7 @@ triggers:
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
 
+
 ## When to invoke this skill
 
 Use when asked to "ship", "deploy",
@@ -403,6 +404,7 @@ Before calling AskUserQuestion, verify:
 - [ ] If you split, you checked dependencies between options before firing the chain
 - [ ] If a per-option Hold fires, you stopped the chain immediately (didn't queue)
 
+
 ## Artifacts Sync (skill start)
 
 ```bash
@@ -500,6 +502,8 @@ else
 fi
 ```
 
+
+
 Privacy stop-gate: if output shows `ARTIFACTS_SYNC: off`, `artifacts_sync_mode_prompted` is `false`, and gbrain is on PATH or `gbrain doctor --fast --json` works, ask once:
 
 > gstack can publish your artifacts (CEO plans, designs, reports) to a private GitHub repo that GBrain indexes across machines. How much should sync?
@@ -525,6 +529,7 @@ At skill END before telemetry:
 "~/.claude/skills/gstack/bin/gstack-brain-sync" --discover-new 2>/dev/null || true
 "~/.claude/skills/gstack/bin/gstack-brain-sync" --once 2>/dev/null || true
 ```
+
 
 ## Model-Specific Behavioral Patch (claude)
 
@@ -580,11 +585,18 @@ if [ -d "$_PROJ" ]; then
   fi
   _LATEST_CP=$(find "$_PROJ/checkpoints" -name "*.md" -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
   [ -n "$_LATEST_CP" ] && echo "LATEST_CHECKPOINT: $_LATEST_CP"
+  if [ -f "$_PROJ/decisions.active.json" ]; then
+    echo "--- ACTIVE DECISIONS (recent, scope-relevant) ---"
+    ~/.claude/skills/gstack/bin/gstack-decision-search --recent 5 2>/dev/null
+    echo "--- END DECISIONS ---"
+  fi
   echo "--- END ARTIFACTS ---"
 fi
 ```
 
 If artifacts are listed, read the newest useful one. If `LAST_SESSION` or `LATEST_CHECKPOINT` appears, give a 2-sentence welcome back summary. If `RECENT_PATTERN` clearly implies a next skill, suggest it once.
+
+**Cross-session decisions.** If `ACTIVE DECISIONS` are listed, treat them as prior settled calls with their rationale — do not silently re-litigate them; if you're about to reverse one, say so explicitly. Reach for `~/.claude/skills/gstack/bin/gstack-decision-search` whenever a question touches a past decision ("what did we decide / why / did we try"). When you or the user make a DURABLE decision (architecture, scope, tool/vendor choice, or a reversal) — NOT a turn-level or trivial choice — log it with `~/.claude/skills/gstack/bin/gstack-decision-log` (`--supersede <id>` for a reversal). Reliable and local; gbrain not required.
 
 ## Writing Style (skip entirely if `EXPLAIN_LEVEL: terse` appears in the preamble echo OR the user's current message explicitly requests terse / no-explanations output)
 
@@ -598,6 +610,7 @@ Applies to AskUserQuestion, user replies, and findings. AskUserQuestion Format i
 - Terse mode (EXPLAIN_LEVEL: terse): no glosses, no outcome-framing layer, shorter responses.
 
 Curated jargon list lives at `~/.claude/skills/gstack/scripts/jargon-list.json` (80+ terms). On the first jargon term you encounter this session, Read that file once; treat the `terms` array as the canonical list. The list is repo-owned and may grow between releases.
+
 
 ## Completeness Principle — Boil the Lake
 
@@ -773,6 +786,8 @@ Print the detected base branch name. In every subsequent `git diff`, `git log`,
 branch name wherever the instructions say "the base branch" or `<default>`.
 
 ---
+
+
 
 # Ship: Fully Automated Ship Workflow
 
