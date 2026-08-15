@@ -30,10 +30,11 @@ import { spawnSync } from 'child_process';
 import { isPaidTestFile } from '../test/helpers/paid-test-set';
 
 const ROOT = path.resolve(import.meta.dir, '..');
-// design/test was silently absent from BOTH the package.json test script and
-// this list — design tests (including a teardown bomb) never ran in any CI
-// or local free run. Keep the two lists in sync.
-const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'design/test'] as const;
+// design/test and ios-qa/daemon/test were both silently absent from every
+// runner (package.json glob + this list) — design tests (including a teardown
+// bomb) and the 10 hermetic ios-qa daemon suites never ran in any CI or local
+// free run. Keep the two lists in sync with package.json's test script.
+const TEST_ROOTS = ['browse/test', 'test', 'make-pdf/test', 'design/test', 'ios-qa/daemon/test'] as const;
 const TEST_FILE_REGEX = /\.test\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
 // POSIX-only patterns that indicate a test will fail on windows-latest no
