@@ -261,37 +261,47 @@ describe('timeline-stop-hook wiring', () => {
     expect(setup).not.toMatch(/list-sources 2>\/dev\/null \| grep -q "gstack-timeline-stop"/);
   });
 
-  test('fresh register prefers the global-install hook path when present', () => {
-    // Drive setup's _hook_install_path directly: global install present → the
-    // registration survives deleting the worktree setup ran from.
+  test('hook path resolution is canonical-only: global install or skip, never the worktree', () => {
+    // Drive setup's _hook_command_path directly: canonical install present →
+    // that path (survives deleting the worktree setup ran from). Absent →
+    // non-zero and NO output — registration is skipped with a log line; the
+    // running tree's path is NEVER baked into settings.json (the SOURCE
+    // fallback was the phantom-hooks defect and is deliberately gone).
     const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
-    const fn = setup.match(/_hook_install_path\(\) \{[\s\S]*?\n\}/);
+    const fn = setup.match(/_hook_command_path\(\) \{[\s\S]*?\n\}/);
     expect(fn).not.toBeNull();
 
     const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-hookpath-'));
     try {
-      const globalHook = path.join(
-        fakeHome, '.claude', 'skills', 'gstack', 'hosts', 'claude', 'hooks', 'timeline-stop-hook',
-      );
+      const canonicalRoot = path.join(fakeHome, '.claude', 'skills', 'gstack');
+      const globalHook = path.join(canonicalRoot, 'hosts', 'claude', 'hooks', 'timeline-stop-hook');
       fs.mkdirSync(path.dirname(globalHook), { recursive: true });
       fs.writeFileSync(globalHook, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      const env = { ...process.env, HOME: fakeHome, SOURCE_GSTACK_DIR: '/some/dev/worktree' };
+      const env = {
+        ...process.env,
+        HOME: fakeHome,
+        SOURCE_GSTACK_DIR: '/some/dev/worktree',
+        CANONICAL_GSTACK_ROOT: canonicalRoot,
+      };
 
       const withGlobal = spawnSync(
         'bash',
-        ['-c', `${fn![0]}\n_hook_install_path hosts/claude/hooks/timeline-stop-hook`],
+        ['-c', `${fn![0]}\n_hook_command_path hosts/claude/hooks/timeline-stop-hook`],
         { env, encoding: 'utf-8', timeout: 10_000 },
       );
+      expect(withGlobal.status).toBe(0);
       expect(withGlobal.stdout.trim()).toBe(globalHook);
 
-      // No global install (fresh first install from a clone) → setup-time path.
+      // No canonical install → the resolver FAILS (caller logs a visible
+      // skip); it never falls back to the setup-time tree.
       fs.rmSync(globalHook);
       const withoutGlobal = spawnSync(
         'bash',
-        ['-c', `${fn![0]}\n_hook_install_path hosts/claude/hooks/timeline-stop-hook`],
+        ['-c', `${fn![0]}\n_hook_command_path hosts/claude/hooks/timeline-stop-hook`],
         { env, encoding: 'utf-8', timeout: 10_000 },
       );
-      expect(withoutGlobal.stdout.trim()).toBe('/some/dev/worktree/hosts/claude/hooks/timeline-stop-hook');
+      expect(withoutGlobal.status).not.toBe(0);
+      expect(withoutGlobal.stdout.trim()).toBe('');
     } finally {
       fs.rmSync(fakeHome, { recursive: true, force: true });
     }
@@ -357,10 +367,11 @@ describe('timeline-stop-hook wiring', () => {
     }
   });
 
-  test('corrupt settings.json: ensure-event refuses (exit 1) and never rewrites the file', () => {
+  test('corrupt settings.json: ensure-event refuses (exit 3) and never rewrites the file', () => {
     // The old catch{} folded an unparseable EXISTING settings.json into {}
     // and the atomic write replaced the user's permissions/env/other hooks
-    // with just ours. Now: loud stderr error, exit 1, file byte-identical.
+    // with just ours. Now: loud stderr error, fail-closed exit 3 (the
+    // settings-hook parse-refusal code), file byte-identical.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ensure-corrupt-'));
     try {
       const settingsFile = path.join(dir, 'settings.json');
@@ -375,7 +386,7 @@ describe('timeline-stop-hook wiring', () => {
         '--timeout', '5',
       ], { env: { ...process.env, GSTACK_SETTINGS_FILE: settingsFile }, encoding: 'utf-8', timeout: 15_000 });
 
-      expect(r.status).toBe(1);
+      expect(r.status).toBe(3);
       expect(r.stderr).toContain('not valid JSON');
       // Never rewritten — the corrupt bytes (and whatever the user can still
       // salvage from them) survive verbatim.
