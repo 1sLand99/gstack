@@ -1,5 +1,58 @@
 # Changelog
 
+## [1.71.0.0] - 2026-08-27
+
+**Every skill invocation just got half the prompt bill.**
+**Same behavior, measured by A/B evals, locked by CI ceilings.**
+
+Every gstack skill pays a fixed prompt cost before doing any work. This release cuts that cost across all 62 skills and pins the wins so they can't creep back. The shared preamble's bash moved into two runtime scripts (`bin/gstack-skill-start`, `bin/gstack-skill-end`) that echo the same STATUS lines the prose always interpreted. One-time onboarding text now appears only when its gate actually fires, emitted as session-bound instruction blocks instead of riding along in every render. Eleven more skills got the section carve and office-hours' existing carve went deeper, taking the carved roster from 9 to 20: heavy reference bodies load on demand at the step that needs them, never before.
+
+### The numbers that matter
+
+Source: `bin/gstack-context-bill --diff` comparing the main render against this branch's render, both regenerated from source.
+
+| Ledger | Before | After | Δ |
+|---|---|---|---|
+| /review eager per invocation | 109.5KB (~26.6K tok) | 53.7KB (~13.0K tok) | −51% |
+| /land-and-deploy eager | 109.8KB | 54.4KB | −50% |
+| /codex eager | 100.0KB | 53.9KB | −46% |
+| Corpus on disk | 6.4MB (~1,651K tok) | 5.4MB (~1,398K tok) | −15% |
+| Repo CLAUDE.md (always-on in dev sessions) | 66.4KB | 44.9KB | −32% |
+
+50 of the 62 installed skills dropped (the rest are fixture/alias entries with no preamble to shed). The smallest real cut is −4,780 tokens per invocation (tier-1 utilities); non-carved tier-2 skills each shed a flat ~20.8KB of preamble. Zero always-on or eager growth anywhere in the diff.
+
+The behavioral proof ran before this shipped: an A/B eval pins the script render against the old inline render, a section-loading eval verifies a real agent Reads each carved section before doing its step (20 skills, data-driven), and the full paid gate passed with the environmental-only baseline. The context-budget ratchet re-captured after every wave, so each ceiling now sits at the new, lower number.
+
+### What this means for you
+
+The agent reads roughly half the boilerplate before starting your task, so first-token latency and per-invocation cost drop across every skill you run. Onboarding prompts you already answered never render again. Nothing else should feel different: if a skill behaves differently than it did on v1.69, that's a bug, and the A/B harness exists to catch it. Run `bun run test` after upgrading; the ratchet will tell you if anything grew.
+
+### Itemized changes
+
+### Added
+- `bin/gstack-skill-start` / `bin/gstack-skill-end`: the preamble and telemetry runtime, replacing ~18KB of inline bash per tier-2+ skill. Emits a `SKILL_START_PROTO: 1` handshake, STATUS lines, and gated one-time onboarding as `GSTACK_INSTRUCTION` blocks bound to a per-run session ID with a random suffix; passthrough output is sanitized so repo or prior-session content can never mint directive blocks or forge the session ID.
+- `bin/gstack-retro-metrics`: deterministic git metrics for /retro (labeled contract, local reads only), replacing inline git/awk in the skill body.
+- Section carves for 11 new skills — review, codex, land-and-deploy, autoplan, spec, setup-gbrain, qa, browse, retro, design-html, design-shotgun — plus a deeper office-hours carve (Phase 2A/2B), each with registered guards, loading scenarios, and recomputed size floors. The design carves force-read their UX doctrine before design work begins.
+- Context-budget ratchet: a free CI test grades the always-on catalog and each skill's per-invocation cost against committed ceilings; growth fails the suite, reductions re-capture and lock.
+- Six reference docs extracted verbatim from the repo CLAUDE.md (browser internals, CHANGELOG format spec, project tree, hermetic-E2E notes, slop-scan guide, OpenClaw publishing), each replaced inline by a short rule plus pointer.
+
+### Changed
+- The AskUserQuestion tool-resolution and 5+-option rules render as a compact branch table keyed on echoed STATUS lines; full split/CJK rules live at absolute install paths read on demand. All 14 mandatory format pins stay in every tier-2+ skeleton.
+- ios-fix, ios-clean, ios-sync, and ios-design-review dropped to preamble tier 2 (they never used the tier-3 sections).
+- The preamble degrades safely on stale installs: missing handshake means safe defaults, deferred onboarding (consent is never lost), and a one-line upgrade hint.
+- The privacy consent gate and telemetry prompt fire only in interactive sessions; spawned and headless runs defer them to the next human session.
+- Hermetic E2E children get seeded onboarding state in their own `GSTACK_HOME`, so evals never burn turns on first-run prompts.
+
+### Fixed
+- The once-daily artifacts pull is now non-interactive and slow-network bounded, so a hung remote can't stall the first skill invocation of the day.
+- Branch names and artifacts-repo state files are sanitized before entering STATUS output and timeline records, closing log-forgery paths via hostile ref names or planted files.
+- Skill-start no longer parses a multi-megabyte `~/.claude.json` on every invocation when no gbrain server is registered.
+
+### For contributors
+- Preamble A/B eval (`skill-e2e-preamble-script-ab`, periodic tier) pins script-render behavior against the pre-consolidation inline render; the carve-section-loading eval covers all 20 carved skills at an honest 480s ceiling.
+- New free tests: skill-start/skill-end contract and behavior (13), retro-metrics (11), onboarding moved-literals tombstone (3 tests pinning 12 literals both directions), context-budget ratchet (7). Parity baseline and ratchet fixtures re-captured; the shrink floor stays (OV8 evaluated).
+- `test/helpers/touchfiles-data.ts`: the runtime scripts joined every dep list that named the moved generators, so diff-based eval selection still fires on script changes.
+
 ## [1.70.1.0] - 2026-08-26
 
 **Ship names its documentation subagent at every decision point.**
