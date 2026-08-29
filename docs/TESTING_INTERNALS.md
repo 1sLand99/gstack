@@ -89,3 +89,25 @@ required per entry; removal re-activates the file), plus a weekly
 `test/helpers/eval-budgets.ts` (JUDGE/CAPTURE/CAPTURE_LONG/PTY/PTY_LONG);
 `test/eval-budgets-policy.test.ts` pins that every tier fits the shard wall
 minus overhead and ratchets raw literals. Budget above the wall is fiction.
+
+## Cloud sandboxes (Vercel / Conductor cloud workspaces)
+
+Syscall-supervised sandboxes need environment setup before `bun run test` can
+run green: run `scripts/sandbox-doctor.sh` once per boot. It documents and
+treats the full failure taxonomy (missing /dev/fd, 64M /dev/shm, spurious
+access(2) EACCES from the seccomp supervisor under load, full-capability
+processes defeating chmod-denial tests, no X server, no git identity, and
+Conductor's git-shim exit-code laundering). The doctor seeds `TMPDIR`,
+`DISPLAY`, and the runner knobs into `~/.bashrc`, so open a new shell (or
+`source ~/.bashrc`) before running the suite. Then:
+
+```bash
+setpriv --ambient-caps=-all --bounding-set=-all bun run test
+```
+
+Two runner knobs exist for these environments (both no-ops unless set):
+`GSTACK_FREE_JOBS` overrides the shard count in either direction (2 is the measured sweet spot — one
+serial mega-shard and 6-way sharding both saturate the per-process syscall
+supervisor), and `GSTACK_FREE_RETRY_FLAKY=1` re-runs attributed failures once
+serially, downgrading a clean retry to a loud FLAKY-PASS (capped at 5 files so
+a broken tree can't masquerade as flaky).
