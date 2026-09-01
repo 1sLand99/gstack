@@ -176,6 +176,11 @@ git diff <base>...HEAD -- VERSION
       - B) Keep current version — add new changes to the existing CHANGELOG entry
       - C) Skip — leave version as-is, handle later
 
+   **Spawned sessions** (per the spawned-dispatch contract at the top of this skill): the
+   recommendation flips — choose C (leave version as-is) and record the uncovered scope in
+   your completion report (the `decisions` array when dispatched from /ship).
+   A spawned run must never change VERSION: the dispatching workflow owns version numbering.
+
    The key insight: a VERSION bump set for "feature A" should not silently absorb "feature B"
    if feature B is substantial enough to deserve its own version entry.
 
@@ -426,6 +431,11 @@ checks the docs against what actually shipped. This is a standard part of /docum
 not an opt-in. The user turns it off only by asking explicitly
 (`gstack-config set codex_reviews disabled`).
 
+**Spawned-session skip** (per the spawned-dispatch contract at the top of this skill): in a
+spawned session, skip this entire section — the dispatching workflow owns its own review
+passes, and the apply gate below needs a human. Note the skip in your completion report (the
+Step 9 doc health summary you already produced) and finish the workflow.
+
 **Preflight — decide whether and how the doc review runs:**
 
 ```bash
@@ -524,7 +534,7 @@ On any error: continue — documentation review is informational, not a gate.
 
 **If `CODEX_MODE: not_installed` or `not_authed` (or Codex errored at runtime):**
 
-Dispatch via the Agent tool with the same prompt. Bound it at a 5-minute timeout.
+Dispatch via the Agent tool with the same prompt, passing `run_in_background: false` (subagents default to background since Claude Code v2.1.198). Bound it at a 5-minute timeout; if it never completes, treat the review as unavailable and continue.
 Present findings under `DOCUMENTATION REVIEW (Claude subagent):`. If it fails: "Doc review unavailable. Continuing."
 
 **Apply decision (T3B — informational, never auto-edit, but findings don't evaporate).**
